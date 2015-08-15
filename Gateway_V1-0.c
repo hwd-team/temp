@@ -589,7 +589,7 @@ void decode232Str() {
 	
 	uint8_t feedback[10];
 	
-	if (rx232Str[0] == 0x05) {
+	if (rx232Str[0] == 0xFF) {
 			
 // 		check = rx232Str[0];
 // 		for (i = 1; i < 8; i++) {
