@@ -40,6 +40,8 @@
 #define ERR_CMD2		0xF1
 #define	ERR_CHECKSUM	0xEF
 
+#define VIRTUAL_CHECKSUM	0xAA
+
 #define HWD_NET		PC2
 
 
@@ -494,8 +496,8 @@ ISR(USART1_RX_vect) {
 }
 
 void Make485Cmd(rsRingBuffer_Data_t *data, char ID, char tipo, char CMD1, char CMD2) {
-	char check;
-	uint8_t i;
+// 	char check;
+// 	uint8_t i;
 	
 	data[0] = 0xFF;
 	data[1] = 0x05;
@@ -506,12 +508,14 @@ void Make485Cmd(rsRingBuffer_Data_t *data, char ID, char tipo, char CMD1, char C
 	data[6] = 0x00;
 	data[7] = 0x00;
 	
-	check = data[0];
-	for (i = 1; i <= 7; i++) {
-		check ^= data[i];
-	}
-	
-	data[8] = check;
+// 	check = data[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= data[i];
+// 	}
+// 	
+// 	data[8] = check;
+
+	data[8] = VIRTUAL_CHECKSUM;
 	data[9] = 0x0D;
 }
 
@@ -526,8 +530,8 @@ void send485Cmd(char ID, char tipo, char CMD1, char CMD2) {
 
 //void Make232Cmd(rsRingBuffer_Data_t *data, char CMD1, char CMD2, char PARAM_1, char PARAM_2, char PARAM_3) {
 void Make232Cmd(rsRingBuffer_Data_t *data, char CMD_ID, char CMD_TYPE, char CMD1, char CMD2, char CMD3, char CMD4) {
-	char check;
-	uint8_t i;
+// 	char check;
+// 	uint8_t i;
 	
 // 	data[0] = 0x06;
 // 	data[1] = CMD1;
@@ -553,12 +557,14 @@ void Make232Cmd(rsRingBuffer_Data_t *data, char CMD_ID, char CMD_TYPE, char CMD1
 	data[6] = CMD3;
 	data[7] = CMD4;
 	
-	check = data[0];
-	for (i = 1; i <= 7; i++) {
-		check ^= data[i];
-	}
-	
-	data[8] = check;
+// 	check = data[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= data[i];
+// 	}
+// 	
+// 	data[8] = check;
+
+	data[8] = VIRTUAL_CHECKSUM;
 	data[9] = 0x0D;
 	
 	// Se msg nao for msg keep alive, reinicia contagem de tempo
@@ -577,7 +583,7 @@ void limpa_232Str() {
 }
 
 void decode232Str() {
-	uint8_t i;
+//	uint8_t i;
 	char check;
 	uint8_t result;
 	
@@ -585,10 +591,12 @@ void decode232Str() {
 	
 	if (rx232Str[0] == 0x05) {
 			
-		check = rx232Str[0];
-		for (i = 1; i < 8; i++) {
-			check ^= rx232Str[i];
-		}
+// 		check = rx232Str[0];
+// 		for (i = 1; i < 8; i++) {
+// 			check ^= rx232Str[i];
+// 		}
+
+		check = VIRTUAL_CHECKSUM;
 		
 		if (check == rx232Str[8]) {
 			// ####################### TO BRIDGE #########################
@@ -709,14 +717,17 @@ void limpa_485Str() {
 }
 
 void decode485Str() {
-	uint8_t i, check;
+//	uint8_t i;
+	uint8_t check;
 	uint8_t temp;
 	bool send_232;
 	
-	check = rx485Str[0];
-	for (i = 1; i <= 7; i++) {
-		check ^= rx485Str[i];
-	}
+// 	check = rx485Str[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= rx485Str[i];
+// 	}
+
+	check = VIRTUAL_CHECKSUM;
 	
 	send_232 = false;
 	if (check == rx485Str[8]) {
