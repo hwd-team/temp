@@ -659,6 +659,7 @@ void decodeInputStr() {
 // 	for (i = 1; i <= 7; i++) {
 // 		check ^= rxStr[i];
 // 	}
+	
 	check = VIRTUAL_CHECKSUM;
 	
 	if (check == rxStr[8]) {
