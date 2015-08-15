@@ -655,10 +655,10 @@ void decodeInputStr() {
 //	uint8_t i;
 	unsigned char saida, check;
 	
-	//check = rxStr[0];
-	//for (i = 1; i <= 7; i++) {
-	//	check ^= rxStr[i];
-	//}
+// 	check = rxStr[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= rxStr[i];
+// 	}
 	
 	check = VIRTUAL_CHECKSUM;
 	
@@ -759,25 +759,24 @@ void limpa_str() {
 
 void sendFB() {
 	char feedback[10];
-//	char check;
-//	uint8_t i;
+// 	char check;
+// 	uint8_t i;
 	
 	feedback[0] = 0xFF;
 	feedback[1] = 0x06;
 	feedback[2] = ID;
 	feedback[3] = tipo;
-	feedback[4] = FB_MASK | (0x0F & ((~ (char) mem_ext_input)));
+	feedback[4] = FB_MASK | (0x0F &  (~ (char) mem_ext_input));
 	feedback[5] = FB_MASK | (0x0F & ((~ (char) mem_ext_input) >> 4));
-	feedback[6] = FB_MASK | (0x0F & PINC);
+	feedback[6] = FB_MASK | (0x0F &  PINC);
 	feedback[7] = FB_MASK | (0x0F & (PINC >> 4));
 	
-	//check = feedback[0];
-	//for (i = 1; i <= 7; i++) {
-	//	check ^= feedback[i];
-	//}
-	
-//	feedback[8] = check;
-
+// 	check = feedback[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= feedback[i];
+// 	}
+// 	
+// 	feedback[8] = check;
 	feedback[8] = VIRTUAL_CHECKSUM;
 	feedback[9] = 0x0D;
 	
@@ -787,25 +786,24 @@ void sendFB() {
 
 void resend_rqst() {
 	char rqst[10];
-//	char check;
-//	uint8_t i;
+// 	char check;
+// 	uint8_t i;
 	
 	rqst[0] = 0xFF;
 	rqst[1] = 0x15;		// NAK
 	rqst[2] = ID;
 	rqst[3] = tipo;
-	rqst[4] = FB_MASK | (0x0F & ((~ (char) mem_ext_input)));
+	rqst[4] = FB_MASK | (0x0F &  (~ (char) mem_ext_input));
 	rqst[5] = FB_MASK | (0x0F & ((~ (char) mem_ext_input) >> 4));
-	rqst[6] = FB_MASK | (0x0F & PINC);
+	rqst[6] = FB_MASK | (0x0F &  PINC);
 	rqst[7] = FB_MASK | (0x0F & (PINC >> 4));
 	
-//	check = rqst[0];
-//	for (i = 1; i <= 7; i++) {
-//		check ^= rqst[i];
-//	}
-	
-//	rqst[8] = check;
-
+// 	check = rqst[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= rqst[i];
+// 	}
+// 	
+// 	rqst[8] = check;
 	rqst[8] = VIRTUAL_CHECKSUM;
 	rqst[9] = 0x0D;
 	
