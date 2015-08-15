@@ -30,15 +30,16 @@
 
 #define ACK			0x06
 #define NAK			0x15
-#define TO_BRIDGE	0x8F
-#define TO_GO		0x90
+#define TO_BRIDGE	0xA0
+#define TO_GO		0xA1
 #define BRIDGE_ADD	0x01
 #define BRIDGE_REM	0x00
 
-#define ERR				0xFF
+#define ERR				0xF2
 #define ERR_CMD1		0xF0
 #define ERR_CMD2		0xF1
 #define	ERR_CHECKSUM	0xEF
+
 #define VIRTUAL_CHECKSUM	0xAA
 
 #define HWD_NET		PC2
@@ -50,6 +51,7 @@ int kk = 0, ll = 0, rele_cmd = 0xFF, rele_out[8] = { 1 << 0, 1 << 1, 1 << 2, 1 <
 uint8_t qde_blink;
 uint8_t VNET_backup;
 
+uint16_t keep_alive;
 
 id_list IDs;
 bool rs485_Timedout;
@@ -64,13 +66,21 @@ bool scan_status;
 bool reception232Complete;
 volatile RingBuff_t *tx232RingBuff, tx232VRingBuff; // RING BUFFER QUE ARMAZENA STRINGS A SEREM ENVIADAS
 // Recepcao
-uint8_t str232[8];
+uint8_t str232[10];
 uint8_t *rx232Str;
 uint8_t *rx232StrPtr;
 
 // Fila da porta serial
 rsRingBuffer_Data_t data_in[ELEMENT_SIZE];
 rsRingBuffer_Data_t data_out[ELEMENT_SIZE];
+
+typedef struct
+{
+	uint8_t msg[10];
+	uint8_t count;
+} last_msg;
+
+last_msg last_sent_msg;
 
 rsRingBuffer_t rsBuffer;
 rsRingBuffer_t *rsBufferPtr;
@@ -104,7 +114,11 @@ void MakeStrCmd(char ID, char tipo);
 void Make485Cmd(rsRingBuffer_Data_t *data, char ID, char tipo, char CMD1, char CMD2);
 void send485Cmd(char ID, char tipo, char CMD1, char CMD2);
 
-void Make232Cmd(rsRingBuffer_Data_t *data, char CMD1, char CMD2, char PARAM_1, char PARAM_2, char PARAM_3);
+//void Make232Cmd(rsRingBuffer_Data_t *data, char CMD1, char CMD2, char PARAM_1, char PARAM_2, char PARAM_3);
+void Make232Cmd(rsRingBuffer_Data_t *data, char CMD_ID, char CMD_TYPE, char CMD1, char CMD2, char CMD3, char CMD4);
+
+void keep_alive_Start_Timeout();
+void keep_alive_Stop_Timeout();
 
 void REG16_WriteOCR1A(unsigned int i);
 void rs485_Start_Timeout();
@@ -118,6 +132,15 @@ int main(void)
 {
 	uint8_t i;
 	id_item *modulo;
+	
+	// Timer0
+	// Configura Timer1 para o modo CTC
+	TCCR0 |= (1 << WGM01);
+	// Habilita interrupcao CTC para o comparador A
+	TIMSK |= (1 << OCIE0);
+	// Define o limite de contagem do CTC. Configuracao de 1cs = 10ms a um clock de 14,7456 MHz e prescaler de 1024
+	OCR0 = 0x8F;
+	keep_alive_Stop_Timeout();
 	
 	// Timer1
 	// Configura Timer1 para o modo CTC
@@ -219,7 +242,7 @@ int main(void)
 				
 					// Enviar requisicao de dados
 					if (modulo->id != 0) {
-						send485Cmd(modulo->id, modulo->tipo, '?', 0x00);
+						send485Cmd(modulo->id, modulo->tipo, '?', 0x00/*modulo_status_out[modulo->id]*/);
 						
 						rs485_Timedout = false;
 					}
@@ -291,11 +314,11 @@ ISR(USART0_RX_vect) {
 	// Se string de recepcao esta vazia
 	if (rx232StrPtr - rx232Str == 0) {
 		// Se o primeiro char é 0x05 (char de inicio de msg)
-		if (rxByte == 0x05) {
+		if (rxByte == 0xFF) {
 			memcpy(rx232StrPtr, &rxByte, sizeof(char));
 			rx232StrPtr++;
 		}
-		// Limpa string de recepcao e mostra msg erro 11
+		// Limpa string de recepcao e mostra msg erro 
 		else {
 			limpa_232Str();
 			
@@ -306,21 +329,42 @@ ISR(USART0_RX_vect) {
 			#endif
 		}
 	}
+	// ...
+	else if (rx232StrPtr - rx232Str == 1) {
+		// Se o segundo char é 0x05 (char de inicio de msg)
+		if (rxByte == 0x05) {
+			memcpy(rx232StrPtr, &rxByte, sizeof(char));
+			rx232StrPtr++;
+		}
+		// Limpa string de recepcao e mostra msg erro 
+		else {
+			limpa_232Str();
+			
+			#ifdef DEBUG
+			qde_blink = 16;
+			VNET_backup = PORTC & (1 << HWD_NET);
+			PWM_Start_Timeout();
+			#endif
+		}
+	}
 	// Se string de rececpao está entre segundo e ultimo char vai armazenando na string de recepcao
-	else if (rx232StrPtr - rx232Str > 0 && rx232StrPtr - rx232Str < 8) {
+	else if (rx232StrPtr - rx232Str > 0 && rx232StrPtr - rx232Str < 9) {
 		memcpy(rx232StrPtr, &rxByte, sizeof(char));
 		rx232StrPtr++;
 		
-		// Se string de recepcao atingiu tamanho max (= 8)
-		if (rx232StrPtr - rx232Str == 8) {
+		// Se string de recepcao atingiu tamanho max (= 10)
+		if (rx232StrPtr - rx232Str == 10) {
 			// Validação dos caracteres de inicio e fim de msg
-			if (rx232Str[0] == 0x05 && rx232Str[7] == 0x0D)	{
+			if (rx232Str[0] == 0xFF && rx232Str[1] == 0x05 && rx232Str[9] == 0x0D)	{
 				reception232Complete = true;
+			}
+			else {
+				// ToDo:: Solicitar reenvio da string
 			}
 		}
 	}
 	// Se string de recepcao for maior que gera msg erro
-	else if (rx232StrPtr - rx232Str >= 8) {
+	else if (rx232StrPtr - rx232Str >= 10) {
 		limpa_232Str();
 		
 		#ifdef DEBUG
@@ -365,8 +409,17 @@ ISR(USART1_TX_vect) {
 }
 
 ISR(USART1_UDRE_vect) {	
+	uint8_t data;
+	
 	if (!RingBuffer_IsEmpty((RingBuff_t* const) tx485RingBuff)) {
-		UDR1 = RingBuffer_Remove((RingBuff_t* const) tx485RingBuff);
+		data = RingBuffer_Remove((RingBuff_t* const) tx485RingBuff);
+		UDR1 = data;
+		
+		if (data == 0xFF) {
+			last_sent_msg.count = 0;
+			last_sent_msg.msg[last_sent_msg.count] = data;
+			last_sent_msg.count++;
+		}
 	}
 	else {
 		UCSR1B &= ~(1 << UDRIE1);
@@ -425,6 +478,9 @@ ISR(USART1_RX_vect) {
 			if (rx485Str[0] == 0xFF && rx485Str[1] == 0x06 && rx485Str[9] == 0x0D)	{
 				reception485Complete = true;
 			}
+			else {
+				// ToDo:: Solicitar reenvio de String
+			}
 		}
 	}
 	// Se string de recepcao for maior que gera msg erro 0x08
@@ -440,8 +496,8 @@ ISR(USART1_RX_vect) {
 }
 
 void Make485Cmd(rsRingBuffer_Data_t *data, char ID, char tipo, char CMD1, char CMD2) {
-//	char check;
-//	uint8_t i;
+// 	char check;
+// 	uint8_t i;
 	
 	data[0] = 0xFF;
 	data[1] = 0x05;
@@ -452,13 +508,13 @@ void Make485Cmd(rsRingBuffer_Data_t *data, char ID, char tipo, char CMD1, char C
 	data[6] = 0x00;
 	data[7] = 0x00;
 	
-//	check = data[0];
-//	for (i = 1; i <= 7; i++) {
-//		check ^= data[i];
-//	}
-	
-//	data[8] = check;
-	
+// 	check = data[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= data[i];
+// 	}
+// 	
+// 	data[8] = check;
+
 	data[8] = VIRTUAL_CHECKSUM;
 	data[9] = 0x0D;
 }
@@ -472,32 +528,56 @@ void send485Cmd(char ID, char tipo, char CMD1, char CMD2) {
 	USART_485_transmit();
 }
 
-void Make232Cmd(rsRingBuffer_Data_t *data, char CMD1, char CMD2, char PARAM_1, char PARAM_2, char PARAM_3) {
-//	char check;
-//	uint8_t i;
+//void Make232Cmd(rsRingBuffer_Data_t *data, char CMD1, char CMD2, char PARAM_1, char PARAM_2, char PARAM_3) {
+void Make232Cmd(rsRingBuffer_Data_t *data, char CMD_ID, char CMD_TYPE, char CMD1, char CMD2, char CMD3, char CMD4) {
+// 	char check;
+// 	uint8_t i;
 	
-	data[0] = 0x06;
-	data[1] = CMD1;
-	data[2] = CMD2;
-	data[3] = PARAM_1;
-	data[4] = PARAM_2;
-	data[5] = PARAM_3;
+// 	data[0] = 0x06;
+// 	data[1] = CMD1;
+// 	data[2] = CMD2;
+// 	data[3] = PARAM_1;
+// 	data[4] = PARAM_2;
+// 	data[5] = PARAM_3;
+// 	
+// 	check = data[0];
+// 	for (i = 1; i < 6; i++) {
+// 		check ^= data[i];
+// 	}
+// 	
+// 	data[6] = check;
+// 	data[7] = 0x0D;
 	
-//	check = data[0];
-//	for (i = 1; i < 6; i++) {
-//		check ^= data[i];
-//	}
+	data[0] = 0xFF;
+	data[1] = 0x06;
+	data[2] = CMD_ID;
+	data[3] = CMD_TYPE;
+	data[4] = CMD1;
+	data[5] = CMD2;
+	data[6] = CMD3;
+	data[7] = CMD4;
 	
-//	data[6] = check;
+// 	check = data[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= data[i];
+// 	}
+// 	
+// 	data[8] = check;
 
-	data[6] = VIRTUAL_CHECKSUM;
-	data[7] = 0x0D;
+	data[8] = VIRTUAL_CHECKSUM;
+	data[9] = 0x0D;
+	
+	// Se msg nao for msg keep alive, reinicia contagem de tempo
+	if (CMD1 != 0x13) {
+		keep_alive_Stop_Timeout();
+		keep_alive_Start_Timeout();
+	}
 }
 
 void limpa_232Str() {
 	uint8_t i;
 	rx232StrPtr = rx232Str;
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < 10; i++) {
 		rx232Str[i] = 0x00;
 	}
 }
@@ -507,30 +587,30 @@ void decode232Str() {
 	char check;
 	uint8_t result;
 	
-	uint8_t feedback[8];
+	uint8_t feedback[10];
 	
 	if (rx232Str[0] == 0x05) {
 			
-		//check = rx232Str[0];
-		//for (i = 1; i < 6; i++) {
-		//	check ^= rx232Str[i];
-		//}
-		
+// 		check = rx232Str[0];
+// 		for (i = 1; i < 8; i++) {
+// 			check ^= rx232Str[i];
+// 		}
+
 		check = VIRTUAL_CHECKSUM;
 		
-		if (check == rx232Str[6]) {
+		if (check == rx232Str[8]) {
 			// ####################### TO BRIDGE #########################
-			if (rx232Str[1] == TO_BRIDGE) {
-				if (rx232Str[2] == 0x11) {
-					switch (rx232Str[3]) {
+			if (rx232Str[2] == TO_BRIDGE) {
+				if (rx232Str[3] == 0x11) {
+					switch (rx232Str[4]) {
 						case BRIDGE_ADD:
-							result = id_insert(&IDs, rx232Str[4], rx232Str[5]);
-							eeprom_write_byte((uint8_t *) (uint16_t) rx232Str[4], (uint8_t) 1);
+							result = id_insert(&IDs, rx232Str[5], rx232Str[6]);
+							eeprom_write_byte((uint8_t *) (uint16_t) rx232Str[5], (uint8_t) 1);
 							break;
 							
 						case BRIDGE_REM:
-							result = id_remove(&IDs, rx232Str[4], rx232Str[5]);
-							eeprom_write_byte((uint8_t *) (uint16_t) rx232Str[4], (uint8_t) 0);
+							result = id_remove(&IDs, rx232Str[5], rx232Str[6]);
+							eeprom_write_byte((uint8_t *) (uint16_t) rx232Str[5], (uint8_t) 0);
 							break;
 							
 						default:
@@ -538,13 +618,13 @@ void decode232Str() {
 							break;
 					}
 					
-					// ToDo:: armazenar lista de IDs e Tipos na memoria EEPROM
+					// ToDo:: armazenar lista de IDs e TIPOS na memoria EEPROM
 					
-					Make232Cmd(feedback, TO_BRIDGE, 0x11, result, rx232Str[4], rx232Str[5]);
+					Make232Cmd(feedback, TO_BRIDGE, 0x11, result, rx232Str[5], rx232Str[6], 0x00);
 				}
-				else if (rx232Str[2] == 0x12) {
+				else if (rx232Str[3] == 0x12) {
 					// ToDo:: Verificar se já existe varredura habilitada, se não: enviar comando RS485 para habilitar rs485Timedout
-					switch (rx232Str[3]) {
+					switch (rx232Str[4]) {
 						case BRIDGE_ADD: {
 							scan_status = true;
 							rs485_Timedout = true;	// temporario, ver ToDo::
@@ -562,52 +642,62 @@ void decode232Str() {
 							break;
 					}
 					
-					Make232Cmd(feedback, TO_BRIDGE, 0x12, scan_status ? ACK : NAK, rx232Str[4], rx232Str[5]);
+					Make232Cmd(feedback, TO_BRIDGE, 0x12, scan_status ? ACK : NAK, rx232Str[5], rx232Str[6], 0x00);
+				}
+				// Keep Alive true
+				else if (rx232Str[3] == 0x13) {
+					keep_alive_Stop_Timeout();
+					
+					// Reativa varredura
+					scan_status = true;
+					PORTC = PINC | (1 << HWD_NET);
+					
+					keep_alive_Start_Timeout();
 				}
 				else {
 					/* Não é um tipo de comando valido para o Bridge */
-					Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CMD2, rx232Str[4], rx232Str[5]);
+					Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CMD2, rx232Str[5], rx232Str[6], 0x00);
 				}
 				
-				RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 8);
+				RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 10);
 				USART_232_transmit();
 			}
 			// ######################### TO GO ###########################
-			else if (rx232Str[1] == TO_GO) {
+			else if (rx232Str[2] == TO_GO) {
 				// TODO::
 				// Tipos de módulo, como só tem IORL8 com tipo = 1 por enquanto, temoss < 2
 				// Se modulo é rele
-				if (rx232Str[2] > 0 && rx232Str[2] < 2) {
-					Make485Cmd(data_in, rx232Str[3], rx232Str[2], rx232Str[4], rx232Str[5]);
+				if (rx232Str[3] > 0 && rx232Str[3] < 2) {
+					Make485Cmd(data_in, rx232Str[4], rx232Str[3], rx232Str[5], rx232Str[6]);
 					if (!rsRingBuffer_IsFull(rsBufferPtr)) {
 						rsRingBuffer_Insert(rsBufferPtr, data_in);
 						
-						//Make232Cmd(feedback, TO_BRIDGE,  rx232Str[2],  rx232Str[3], rx232Str[4], rx232Str[5]);
+						Make232Cmd(feedback, TO_BRIDGE,  rx232Str[3],  rx232Str[4], rx232Str[5], rx232Str[6], 0x00);
 					}
 					else {
 						//ToDo:: Gerar um log de erro: Buffer cheio
-						Make232Cmd(feedback, TO_BRIDGE, ERR, 0xE0, rx232Str[4], rx232Str[5]);
+						Make232Cmd(feedback, TO_BRIDGE, ERR, 0xE0, rx232Str[5], rx232Str[6], 0x00);
 					}
 				}
 				else {
 					// Tipo Inválido
-					Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CMD2, rx232Str[4], rx232Str[5]);					
+					Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CMD2, rx232Str[5], rx232Str[6], 0x00);					
 				}
 				
-				RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 8);
+				RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 10);
 				USART_232_transmit();
 			}
 			else {
 				// Não é um tipo de comando válido a ser enviado na rede RS485
-				Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CMD1, rx232Str[4], rx232Str[5]);
-				RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 8);
+				Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CMD1, rx232Str[5], rx232Str[6], 0x00);
+				RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 10);
 				USART_232_transmit();
 			}
 		}
 		else {
 			// Erro no Check Sum
-			Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CHECKSUM, rx232Str[4], rx232Str[5]);
-			RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 8);
+			Make232Cmd(feedback, TO_BRIDGE, ERR, ERR_CHECKSUM, rx232Str[5], rx232Str[6], 0x00);
+			RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 10);
 			USART_232_transmit();
 		}
 	}
@@ -632,46 +722,51 @@ void decode485Str() {
 	uint8_t temp;
 	bool send_232;
 	
-//	check = rx485Str[0];
-//	for (i = 1; i <= 7; i++) {
-//		check ^= rx485Str[i];
-//	}
+// 	check = rx485Str[0];
+// 	for (i = 1; i <= 7; i++) {
+// 		check ^= rx485Str[i];
+// 	}
 
 	check = VIRTUAL_CHECKSUM;
 	
 	send_232 = false;
-	if (check == rx485Str[8] && rx485Str[1] == 0x06) {
-		//	Feedback entradas
-		// Juntar byte: Upper and Lower significant bits
-		temp = rx485Str[5];
-		temp = temp << 4;
-		temp = temp | (0x0F & rx485Str[4]);
+	if (check == rx485Str[8]) {
+		if (rx485Str[1] == 0x06) {
+			//	Feedback entradas
+			// Juntar byte: Upper and Lower significant bits
+			temp = rx485Str[5];
+			temp = temp << 4;
+			temp = temp | (0x0F & rx485Str[4]);
 		
-		// Comparar com o status armazenado
-		if (modulo_status_in[rx485Str[2]] != temp) {
-			modulo_status_in[rx485Str[2]] = temp;
-			send_232 = true;
+			// Comparar com o status armazenado
+			if (modulo_status_in[rx485Str[2]] != temp) {
+				modulo_status_in[rx485Str[2]] = temp;
+				send_232 = true;
+			}
+		
+			//	Feedback saidas
+			// Juntar byte: Upper and Lower significant bits
+			temp = rx485Str[7];
+			temp = temp << 4;
+			temp = temp | (0x0F & rx485Str[6]);
+		
+			// Comparar com o status armazenado
+			if (modulo_status_out[rx485Str[2]] != temp) {
+				modulo_status_out[rx485Str[2]] = temp;
+				send_232 = true;
+			}
+		
+			// Ativar LED de status
+			PORTC |= (1 << HWD_NET);
+		
+			// Ativar quando receber string valida da porta serial
+			// ?? O comando abaixo esta certo ??
+			rs485_Stop_Timeout();
+			rs485_Timedout = true;
 		}
-		
-		//	Feedback saidas
-		// Juntar byte: Upper and Lower significant bits
-		temp = rx485Str[7];
-		temp = temp << 4;
-		temp = temp | (0x0F & rx485Str[6]);
-		
-		// Comparar com o status armazenado
-		if (modulo_status_out[rx485Str[2]] != temp) {
-			modulo_status_out[rx485Str[2]] = temp;
-			send_232 = true;
+		else if (rx485Str[1] == NAK) {
+			// Reenviar string
 		}
-		
-		// Ativar LED de status
-		PORTC |= (1 << HWD_NET);
-		
-		// Ativar quando receber string valida da porta serial
-		// ?? O comando abaixo esta certo ??
-		rs485_Stop_Timeout();
-		rs485_Timedout = true;
 	}
 	
 	if (send_232) {
@@ -833,3 +928,43 @@ void MakeStrCmd(char ID, char tipo) {
 // 	
 // 	TCNT3 = 0;
 // }
+
+void keep_alive_Start_Timeout() {
+	TCCR0 |= (1 << CS00) | (1 << CS01) | (1 << CS02);
+}
+
+void keep_alive_Stop_Timeout() {
+	TCCR0 &= ~( (1 << CS00) | (1 << CS01) | (1 << CS02) );
+	
+	// Zerar Timer
+	TCNT0 = 0;
+	
+	keep_alive = 0;
+}
+
+ISR(TIMER0_COMP_vect) {
+	uint8_t msg[8];
+	keep_alive++;
+	TCNT0 = 0;
+	
+	// 500cs = 5s sem receber msg externa envia msg keep alive
+	if (keep_alive == 500) {
+		// Timeout - Enviar msg keep alive
+		Make232Cmd(msg, TO_BRIDGE, 0x13, 0x0F, 0x00, 0x00, 0x00);
+		RingBuffAddChar((RingBuff_t* const) tx232RingBuff, msg, 8);
+		USART_232_transmit();
+	}
+	// Espera ate 530cs, +300ms = +30cs pela resposta, se nao receber desativa varredura
+	else if (keep_alive > 529) {
+		scan_status = false;
+		PORTC = PINC & ~(1 << HWD_NET);
+		
+		// Existe necessidade de transmitir? Nao houve resposta anterior...
+// 		Make232Cmd(feedback, TO_BRIDGE, 0x12, scan_status ? ACK : NAK, 0x00, 0x00);
+// 		RingBuffAddChar((RingBuff_t* const) tx232RingBuff, feedback, 8);
+// 		USART_232_transmit();
+		
+		keep_alive = 0;
+	}
+}
+
