@@ -31,7 +31,9 @@
 #define C_ON	0xF0
 #define C_OFF	0x0F
 #define FB_MASK	0xE0
+
 #define VIRTUAL_CHECKSUM 0xAA
+
 #define DEBUG	1
 
 //--------------------------------
